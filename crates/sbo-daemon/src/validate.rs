@@ -566,13 +566,15 @@ fn check_root_policy_exists(state: &dyn StateView) -> RootPolicyCheck {
         Ok(id) => id,
         Err(e) => return RootPolicyCheck::Error(format!("Invalid root policy id: {}", e)),
     };
-    // Use a default creator for system objects
-    let creator = match Id::new("sys") {
-        Ok(id) => id,
-        Err(e) => return RootPolicyCheck::Error(format!("Invalid sys creator id: {}", e)),
-    };
 
-    match state.get_object(&path, &creator, &id) {
+    // Look up by (path, id) regardless of creator. The root policy's creator is
+    // whatever form the sys identity resolves to — a bare name ("sys") for a
+    // key-rooted genesis, but an email ("sys@<domain>") for a domain-certified
+    // (Mode B) genesis. Hardcoding creator "sys" here would miss the email-rooted
+    // case and silently drop the daemon into genesis mode (no policy enforcement
+    // at all). The object's existence is what gates genesis mode; its creator is
+    // irrelevant to that question.
+    match state.get_first_object_at_path_id(&path, &id) {
         Ok(Some(_)) => RootPolicyCheck::Exists,
         Ok(None) => RootPolicyCheck::DoesNotExist,
         Err(e) => RootPolicyCheck::Error(format!("DB error checking root policy: {}", e)),
@@ -887,8 +889,10 @@ mod dnssec_repro_tests {
         db.put_object(&StoredObject {
             path: SboPath::parse("/sys/policies/").unwrap(),
             id: Id::new("root").unwrap(),
-            creator: Id::new("sys").unwrap(),
-            owner: Id::new("sys").unwrap(),
+            // Email-rooted sys creator, as on the live (Mode B) chain — this is
+            // what check_root_policy_exists's hardcoded "sys" fails to match.
+            creator: Id::new("sys@mingo.place").unwrap(),
+            owner: Id::new("sys@mingo.place").unwrap(),
             content_type: "application/json".to_string(),
             content_hash: ContentHash::sha256(&policy_payload),
             payload: policy_payload,
